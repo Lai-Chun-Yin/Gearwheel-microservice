@@ -162,7 +162,7 @@ app.get('/api/valuation', async (req, res) => {
       finnhubApiKey,
       alphaVantageApiKey,
       market: market || 'US',
-      marketGrowthRatePercent: marketGrowthRatePercent || 10
+      marketGrowthRatePercent: marketGrowthRatePercent ? parseFloat(marketGrowthRatePercent) : 10
     });
 
     res.json(result);
