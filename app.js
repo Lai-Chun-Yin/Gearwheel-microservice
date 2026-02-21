@@ -14,7 +14,11 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
-const { calculateStockValuation } = require('./lib/valuation');
+const { 
+  calculateStockValuation,
+  calculateEarningsTrackValuation,
+  calculateAssetBasedValuation
+} = require('./lib/valuation');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -51,7 +55,7 @@ app.get('/api/docs', (req, res) => {
     version: '1.0.0',
     baseUrl: `http://localhost:${PORT}`,
     endpoints: {
-      'GET /api/valuation': {
+      'GET /api/valuation/peg': {
         description: 'Calculate fair value of a stock using PEG-based valuation',
         requestBody: {
           required: ['symbol'],
@@ -89,6 +93,34 @@ app.get('/api/docs', (req, res) => {
           assumptions: 'object'
         }
       },
+      'GET /api/valuation/earning_track': {
+        description: 'Calculate fair value of a stock using Earnings Track method',
+        requestBody: {
+          required: ['symbol'],
+          optional: ['finnhubApiKey', 'alphaVantageApiKey', 'market', 'marketGrowthRatePercent'],
+          notes: [
+            'finnhubApiKey: provide in request OR set FINNHUB_API_KEY environment variable',
+            'alphaVantageApiKey: provide in request OR set ALPHA_VANTAGE_API_KEY environment variable'
+          ],
+          exampleWithEnvironmentVars: {
+            symbol: 'AAPL'
+          }
+        }
+      },
+      'GET /api/valuation/asset': {
+        description: 'Calculate fair value of a stock using Asset-based valuation method',
+        requestBody: {
+          required: ['symbol'],
+          optional: ['finnhubApiKey', 'alphaVantageApiKey', 'market', 'marketGrowthRatePercent'],
+          notes: [
+            'finnhubApiKey: provide in request OR set FINNHUB_API_KEY environment variable',
+            'alphaVantageApiKey: provide in request OR set ALPHA_VANTAGE_API_KEY environment variable'
+          ],
+          exampleWithEnvironmentVars: {
+            symbol: 'AAPL'
+          }
+        }
+      },
       'GET /health': {
         description: 'Service health check',
         response: {
@@ -115,7 +147,7 @@ app.get('/api/docs', (req, res) => {
  * - market (optional): 'US' or 'HK' (default: 'US')
  * - marketGrowthRatePercent (optional): Market growth rate (default: 10)
  */
-app.get('/api/valuation', async (req, res) => {
+app.get('/api/valuation/peg', async (req, res) => {
   try {
     const { symbol, finnhubApiKey: bodyFinnhubKey, alphaVantageApiKey: bodyAlphaKey, market, marketGrowthRatePercent } = req.query;
 
@@ -178,6 +210,152 @@ app.get('/api/valuation', async (req, res) => {
 });
 
 /**
+ * Calculate stock valuation using Earnings Track method
+ * GET /api/valuation/earning_track
+ * 
+ * Query parameters:
+ * - symbol (required): Stock symbol
+ * - finnhubApiKey (optional): Finnhub API key (or use FINNHUB_API_KEY env var)
+ * - alphaVantageApiKey (optional): Alpha Vantage API key (or use ALPHA_VANTAGE_API_KEY env var)
+ * - market (optional): 'US' or 'HK' (default: 'US')
+ * - marketGrowthRatePercent (optional): Market growth rate (default: 10)
+ */
+app.get('/api/valuation/earning_track', async (req, res) => {
+  try {
+    const { symbol, finnhubApiKey: bodyFinnhubKey, alphaVantageApiKey: bodyAlphaKey, market, marketGrowthRatePercent } = req.query;
+
+    // Use provided keys or fall back to environment variables
+    const finnhubApiKey = bodyFinnhubKey || process.env.FINNHUB_API_KEY;
+    const alphaVantageApiKey = bodyAlphaKey || process.env.ALPHA_VANTAGE_API_KEY;
+
+    // Validate required fields
+    if (!symbol || !finnhubApiKey) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Missing required fields: symbol is required, and finnhubApiKey must be provided in request body or FINNHUB_API_KEY environment variable',
+        receivedFields: {
+          symbol: symbol ? 'provided' : 'missing',
+          finnhubApiKey: bodyFinnhubKey ? 'provided in body' : (process.env.FINNHUB_API_KEY ? 'using environment variable' : 'missing')
+        }
+      });
+    }
+
+    // Validate market if provided
+    if (market && !['US', 'HK'].includes(market)) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Invalid market. Must be "US" or "HK"',
+        received: market
+      });
+    }
+
+    // Validate marketGrowthRatePercent if provided
+    if (marketGrowthRatePercent !== undefined) {
+      const rate = parseFloat(marketGrowthRatePercent);
+      if (!Number.isFinite(rate) || rate <= 0) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'marketGrowthRatePercent must be a positive number',
+          received: marketGrowthRatePercent
+        });
+      }
+    }
+
+    // Calculate valuation
+    const result = await calculateEarningsTrackValuation({
+      symbol: symbol.toUpperCase(),
+      finnhubApiKey,
+      alphaVantageApiKey,
+      market: market || 'US',
+      marketGrowthRatePercent: marketGrowthRatePercent ? parseFloat(marketGrowthRatePercent) : 10
+    });
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('Earnings Track valuation error:', error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * Calculate stock valuation using Asset-based method
+ * GET /api/valuation/asset
+ * 
+ * Query parameters:
+ * - symbol (required): Stock symbol
+ * - finnhubApiKey (optional): Finnhub API key (or use FINNHUB_API_KEY env var)
+ * - alphaVantageApiKey (optional): Alpha Vantage API key (or use ALPHA_VANTAGE_API_KEY env var)
+ * - market (optional): 'US' or 'HK' (default: 'US')
+ * - marketGrowthRatePercent (optional): Market growth rate (default: 10)
+ */
+app.get('/api/valuation/asset', async (req, res) => {
+  try {
+    const { symbol, finnhubApiKey: bodyFinnhubKey, alphaVantageApiKey: bodyAlphaKey, market, marketGrowthRatePercent } = req.query;
+
+    // Use provided keys or fall back to environment variables
+    const finnhubApiKey = bodyFinnhubKey || process.env.FINNHUB_API_KEY;
+    const alphaVantageApiKey = bodyAlphaKey || process.env.ALPHA_VANTAGE_API_KEY;
+
+    // Validate required fields
+    if (!symbol || !finnhubApiKey) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Missing required fields: symbol is required, and finnhubApiKey must be provided in request body or FINNHUB_API_KEY environment variable',
+        receivedFields: {
+          symbol: symbol ? 'provided' : 'missing',
+          finnhubApiKey: bodyFinnhubKey ? 'provided in body' : (process.env.FINNHUB_API_KEY ? 'using environment variable' : 'missing')
+        }
+      });
+    }
+
+    // Validate market if provided
+    if (market && !['US', 'HK'].includes(market)) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Invalid market. Must be "US" or "HK"',
+        received: market
+      });
+    }
+
+    // Validate marketGrowthRatePercent if provided
+    if (marketGrowthRatePercent !== undefined) {
+      const rate = parseFloat(marketGrowthRatePercent);
+      if (!Number.isFinite(rate) || rate <= 0) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'marketGrowthRatePercent must be a positive number',
+          received: marketGrowthRatePercent
+        });
+      }
+    }
+
+    // Calculate valuation
+    const result = await calculateAssetBasedValuation({
+      symbol: symbol.toUpperCase(),
+      finnhubApiKey,
+      alphaVantageApiKey,
+      market: market || 'US',
+      marketGrowthRatePercent: marketGrowthRatePercent ? parseFloat(marketGrowthRatePercent) : 10
+    });
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('Asset-based valuation error:', error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
  * Batch valuation endpoint
  * GET /api/valuation/batch
  * 
@@ -188,7 +366,7 @@ app.get('/api/valuation', async (req, res) => {
  * - alphaVantageApiKey (optional): Alpha Vantage API key (or use ALPHA_VANTAGE_API_KEY env var)
  * - marketGrowthRatePercent (optional): Market growth rate for all (default: 10)
  */
-app.get('/api/valuation/batch', async (req, res) => {
+app.get('/api/valuation/peg/batch', async (req, res) => {
   try {
     const { symbols, markets, finnhubApiKey: bodyFinnhubKey, alphaVantageApiKey: bodyAlphaKey, marketGrowthRatePercent } = req.query;
 
@@ -259,8 +437,10 @@ app.use((req, res) => {
     availableEndpoints: [
       'GET /health',
       'GET /api/docs',
-      'POST /api/valuation',
-      'POST /api/valuation/batch'
+      'GET /api/valuation/peg',
+      'GET /api/valuation/peg/batch',
+      'GET /api/valuation/earning_track',
+      'GET /api/valuation/asset'
     ]
   });
 });
