@@ -17,7 +17,8 @@ require('dotenv').config();
 const { 
   calculateStockValuation,
   calculateEarningsTrackValuation,
-  calculateAssetBasedValuation
+  calculateAssetBasedValuation,
+  calculateDividendValuation
 } = require('./lib/valuation');
 
 const app = express();
@@ -118,6 +119,21 @@ app.get('/api/docs', (req, res) => {
           ],
           exampleWithEnvironmentVars: {
             symbol: 'AAPL'
+          }
+        }
+      },
+      'GET /api/valuation/dividend': {
+        description: 'Calculate fair value of a dividend stock using Dividend Valuation method',
+        requestBody: {
+          required: ['symbol'],
+          optional: ['finnhubApiKey', 'alphaVantageApiKey'],
+          notes: [
+            'finnhubApiKey: provide in request OR set FINNHUB_API_KEY environment variable',
+            'alphaVantageApiKey: REQUIRED - provide in request OR set ALPHA_VANTAGE_API_KEY environment variable',
+            'Method requires dividend history from Alpha Vantage API'
+          ],
+          exampleWithEnvironmentVars: {
+            symbol: 'JNJ'
           }
         }
       },
@@ -356,6 +372,80 @@ app.get('/api/valuation/asset', async (req, res) => {
 });
 
 /**
+ * Calculate stock valuation using Dividend method
+ * GET /api/valuation/dividend
+ * 
+ * Query parameters:
+ * - symbol (required): Stock symbol
+ * - finnhubApiKey (optional): Finnhub API key (or use FINNHUB_API_KEY env var)
+ * - alphaVantageApiKey (required): Alpha Vantage API key (or use ALPHA_VANTAGE_API_KEY env var)
+ * - market (optional): 'US' or 'HK' (default: 'US')
+ * - marketGrowthRatePercent (optional): Market growth rate (default: 10)
+ */
+app.get('/api/valuation/dividend', async (req, res) => {
+  try {
+    const { symbol, finnhubApiKey: bodyFinnhubKey, alphaVantageApiKey: bodyAlphaKey, market, marketGrowthRatePercent } = req.query;
+
+    // Use provided keys or fall back to environment variables
+    const finnhubApiKey = bodyFinnhubKey || process.env.FINNHUB_API_KEY;
+    const alphaVantageApiKey = bodyAlphaKey || process.env.ALPHA_VANTAGE_API_KEY;
+
+    // Validate required fields
+    if (!symbol || !finnhubApiKey || !alphaVantageApiKey) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Missing required fields: symbol, finnhubApiKey, and alphaVantageApiKey are required',
+        receivedFields: {
+          symbol: symbol ? 'provided' : 'missing',
+          finnhubApiKey: bodyFinnhubKey ? 'provided in query' : (process.env.FINNHUB_API_KEY ? 'using environment variable' : 'missing'),
+          alphaVantageApiKey: bodyAlphaKey ? 'provided in query' : (process.env.ALPHA_VANTAGE_API_KEY ? 'using environment variable' : 'missing')
+        }
+      });
+    }
+
+    // Validate market if provided
+    if (market && !['US', 'HK'].includes(market)) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Invalid market. Must be "US" or "HK"',
+        received: market
+      });
+    }
+
+    // Validate marketGrowthRatePercent if provided
+    if (marketGrowthRatePercent !== undefined) {
+      const rate = parseFloat(marketGrowthRatePercent);
+      if (!Number.isFinite(rate) || rate <= 0) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'marketGrowthRatePercent must be a positive number',
+          received: marketGrowthRatePercent
+        });
+      }
+    }
+
+    // Calculate valuation
+    const result = await calculateDividendValuation({
+      symbol: symbol.toUpperCase(),
+      finnhubApiKey,
+      alphaVantageApiKey,
+      market: market || 'US',
+      marketGrowthRatePercent: marketGrowthRatePercent ? parseFloat(marketGrowthRatePercent) : 10
+    });
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('Dividend valuation error:', error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
  * Batch valuation endpoint
  * GET /api/valuation/batch
  * 
@@ -440,7 +530,8 @@ app.use((req, res) => {
       'GET /api/valuation/peg',
       'GET /api/valuation/peg/batch',
       'GET /api/valuation/earning_track',
-      'GET /api/valuation/asset'
+      'GET /api/valuation/asset',
+      'GET /api/valuation/dividend'
     ]
   });
 });
